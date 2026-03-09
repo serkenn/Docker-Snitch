@@ -82,16 +82,16 @@ docker exec curl-test curl -s https://api.github.com
 
 すべてのアクティブな接続をリアルタイムで表示:
 
-| カラム | 説明 |
-|--------|------|
-| Container | 送信元/送信先のコンテナ名 |
-| Dir | アウトバウンド (↑) またはインバウンド (↓) |
-| Remote | ドメイン名または IP アドレス |
-| Port | リモートポート番号 |
-| Proto | TCP / UDP |
-| Action | 許可 (緑) またはブロック (赤) |
-| Sent/Recv | 転送バイト数 |
-| Duration | 接続の継続時間 |
+| カラム    | 説明                                      |
+| --------- | ----------------------------------------- |
+| Container | 送信元/送信先のコンテナ名                 |
+| Dir       | アウトバウンド (↑) またはインバウンド (↓) |
+| Remote    | ドメイン名または IP アドレス              |
+| Port      | リモートポート番号                        |
+| Proto     | TCP / UDP                                 |
+| Action    | 許可 (緑) またはブロック (赤)             |
+| Sent/Recv | 転送バイト数                              |
+| Duration  | 接続の継続時間                            |
 
 任意の接続の **Block** ボタンをクリックしてブロックルールを作成できます。
 
@@ -105,6 +105,7 @@ docker exec curl-test curl -s https://api.github.com
 ### ネットワークマップタブ (Network Map)
 
 Mermaid によるインタラクティブなダイアグラムを表示:
+
 - すべての Docker コンテナ（青枠）
 - 接続先のリモートエンドポイント（灰枠、ブロック時は赤）
 - 各エッジのトラフィック量
@@ -117,15 +118,15 @@ Mermaid によるインタラクティブなダイアグラムを表示:
 
 ファイアウォールルールの作成・編集・切替・削除:
 
-| フィールド | 値 |
-|------------|-----|
-| Container | コンテナ名 または `*`（全コンテナ） |
-| Direction | outbound / inbound / both |
+| フィールド  | 値                                       |
+| ----------- | ---------------------------------------- |
+| Container   | コンテナ名 または `*`（全コンテナ）      |
+| Direction   | outbound / inbound / both                |
 | Remote Host | IP、CIDR（例: `10.0.0.0/8`）、または `*` |
-| Remote Port | ポート番号 または `0`（全ポート） |
-| Protocol | tcp / udp / `*` |
-| Action | allow / block |
-| Priority | 数値が小さいほど優先度が高い |
+| Remote Port | ポート番号 または `0`（全ポート）        |
+| Protocol    | tcp / udp / `*`                          |
+| Action      | allow / block                            |
+| Priority    | 数値が小さいほど優先度が高い             |
 
 ルールは優先度順に評価され、最初にマッチしたルールが適用されます。デフォルトのアクションは **allow**（フェイルオープン）です。
 
@@ -133,12 +134,12 @@ Mermaid によるインタラクティブなダイアグラムを表示:
 
 monitor コンテナの環境変数:
 
-| 変数 | デフォルト値 | 説明 |
-|------|-------------|------|
-| `SNITCH_DB_PATH` | `/data/snitch.db` | SQLite データベースのパス |
-| `SNITCH_API_PORT` | `9645` | API サーバーのポート |
-| `SNITCH_DEFAULT_ACTION` | `allow` | ルールにマッチしない場合のデフォルト判定 |
-| `SNITCH_QUEUE_NUM` | `0` | NFQUEUE のキュー番号 |
+| 変数                    | デフォルト値      | 説明                                     |
+| ----------------------- | ----------------- | ---------------------------------------- |
+| `SNITCH_DB_PATH`        | `/data/snitch.db` | SQLite データベースのパス                |
+| `SNITCH_API_PORT`       | `9645`            | API サーバーのポート                     |
+| `SNITCH_DEFAULT_ACTION` | `allow`           | ルールにマッチしない場合のデフォルト判定 |
+| `SNITCH_QUEUE_NUM`      | `0`               | NFQUEUE のキュー番号                     |
 
 ## プロジェクト構成
 
