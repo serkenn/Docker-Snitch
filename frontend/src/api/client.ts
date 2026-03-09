@@ -16,11 +16,11 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  getConnections: () => fetchJSON<Connection[]>('/connections'),
-  getContainers: () => fetchJSON<Container[]>('/containers'),
+  getConnections: () => fetchJSON<Connection[] | null>('/connections').then(r => r ?? []),
+  getContainers: () => fetchJSON<Container[] | null>('/containers').then(r => r ?? []),
   getStats: () => fetchJSON<Stats>('/stats'),
 
-  getRules: () => fetchJSON<Rule[]>('/rules'),
+  getRules: () => fetchJSON<Rule[] | null>('/rules').then(r => r ?? []),
   createRule: (rule: Omit<Rule, 'id'>) =>
     fetchJSON<Rule>('/rules', { method: 'POST', body: JSON.stringify(rule) }),
   updateRule: (id: number, rule: Rule) =>

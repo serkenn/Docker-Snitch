@@ -70,23 +70,32 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	conns := s.capture.GetConnections()
+	if conns == nil {
+		conns = make([]*capture.Connection, 0)
+	}
 	writeJSON(w, conns)
 }
 
 func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
-	containers := s.resolver.GetContainers()
-	writeJSON(w, containers)
+	result := s.resolver.GetContainers()
+	if result == nil {
+		result = make([]*containers.ContainerInfo, 0)
+	}
+	writeJSON(w, result)
 }
 
 func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
-		rules, err := s.ruleStore.List()
+		ruleList, err := s.ruleStore.List()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		writeJSON(w, rules)
+		if ruleList == nil {
+			ruleList = []rules.Rule{}
+		}
+		writeJSON(w, ruleList)
 
 	case "POST":
 		var rule rules.Rule
