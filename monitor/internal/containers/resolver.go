@@ -5,7 +5,8 @@ import (
 	"log"
 	"sync"
 
-	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -92,7 +93,7 @@ func (r *Resolver) refresh(ctx context.Context) error {
 		if net.Driver != "bridge" {
 			continue
 		}
-		netDetail, err := r.cli.NetworkInspect(ctx, net.ID, network.InspectOptions{})
+		netDetail, err := r.cli.NetworkInspect(ctx, net.ID, types.NetworkInspectOptions{})
 		if err != nil {
 			log.Printf("network inspect %s: %v", net.Name, err)
 			continue
@@ -112,7 +113,7 @@ func (r *Resolver) refresh(ctx context.Context) error {
 		}
 	}
 
-	containerList, err := r.cli.ContainerList(ctx, containertypes.ListOptions{})
+	containerList, err := r.cli.ContainerList(ctx, container.ListOptions{})
 	if err == nil {
 		for _, c := range containerList {
 			name := ""
