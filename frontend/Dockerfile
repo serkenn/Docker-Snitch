@@ -9,17 +9,16 @@ RUN npm run build
 
 FROM nginx:alpine
 
-# Nginx config with API proxy
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 RUN cat > /etc/nginx/conf.d/default.conf << 'EOF'
 server {
-    listen 80;
+    listen 9080;
     root /usr/share/nginx/html;
     index index.html;
 
     location /api/ {
-        proxy_pass http://host.docker.internal:9645;
+        proxy_pass http://127.0.0.1:9645;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -33,4 +32,4 @@ server {
 }
 EOF
 
-EXPOSE 80
+EXPOSE 9080

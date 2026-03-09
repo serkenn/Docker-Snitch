@@ -18,10 +18,7 @@ services:
 
   frontend:
     build: ./frontend
-    ports:
-      - "9080:80"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    network_mode: host
     depends_on:
       - monitor
 
