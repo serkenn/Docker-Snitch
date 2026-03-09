@@ -6,6 +6,7 @@ WORKDIR /app
 
 # Copy source first, then resolve dependencies
 COPY . .
+ENV GOTOOLCHAIN=auto
 RUN go mod tidy
 RUN CGO_ENABLED=0 go build -o /docker-snitch ./cmd/monitor
 
