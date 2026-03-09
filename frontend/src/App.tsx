@@ -8,8 +8,9 @@ import { RuleList } from './components/RuleList'
 import { RuleEditor } from './components/RuleEditor'
 import { TrafficChart } from './components/TrafficChart'
 import { NetworkMap } from './components/NetworkMap'
+import { WorldMap } from './components/WorldMap'
 
-type Tab = 'connections' | 'rules' | 'map'
+type Tab = 'connections' | 'rules' | 'map' | 'worldmap'
 
 export default function App() {
   const [connections, setConnections] = useState<Connection[]>([])
@@ -158,6 +159,12 @@ export default function App() {
               Connections
             </button>
             <button
+              style={tab === 'worldmap' ? styles.tabActive : styles.tab}
+              onClick={() => setTab('worldmap')}
+            >
+              World Map
+            </button>
+            <button
               style={tab === 'map' ? styles.tabActive : styles.tab}
               onClick={() => setTab('map')}
             >
@@ -184,6 +191,10 @@ export default function App() {
                 onBlock={handleBlockConnection}
               />
             </>
+          )}
+
+          {tab === 'worldmap' && (
+            <WorldMap connections={filteredConnections} />
           )}
 
           {tab === 'map' && (

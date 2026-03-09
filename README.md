@@ -6,7 +6,10 @@ Little Snitch inspired network monitor for Docker containers. Captures, visualiz
 
 - **Real-time connection monitoring** -- see every TCP/UDP connection from every container
 - **Per-container filtering** -- click a single container or Cmd/Ctrl+Click to multi-select and view combined traffic
-- **Network Map** -- Mermaid-based topology diagram showing all containers, their connections, and traffic flow
+- **World Map** -- OpenStreetMap / Leaflet visualization showing traffic origins and destinations on a dark world map with animated arcs
+- **GeoIP resolution** -- automatic country, city, ISP, ASN, and lat/lon lookup for every remote IP (via ip-api.com)
+- **Traffic categorization** -- auto-classifies connections as Tailnet, GCP, Mullvad VPN, Cloudflare, AWS, Azure, Hetzner, OVH, or Internet
+- **Network Map** -- Mermaid-based topology diagram grouped by traffic category with bandwidth breakdowns
 - **Firewall rules** -- create allow/block rules per container, remote host, port, and protocol
 - **Passive DNS** -- automatically resolves IPs to domain names by sniffing DNS responses
 - **Traffic charts** -- per-container bandwidth visualization with Recharts
@@ -37,6 +40,13 @@ Little Snitch inspired network monitor for Docker containers. Captures, visualiz
                     │  │ A │ │ B │ │ C │  │
                     │  └───┘ └───┘ └───┘  │
                     └─────────────────────┘
+```
+
+```
+                    ┌──────────────────┐
+                    │  GeoIP Resolver  │
+                    │  (ip-api.com)    │
+                    └──────────────────┘
 ```
 
 ### How it works
@@ -89,6 +99,9 @@ Shows all active connections in real-time:
 | Remote | Domain name or IP address |
 | Port | Remote port number |
 | Proto | TCP / UDP |
+| Location | Country flag, city, and country |
+| ISP / Org | Internet service provider or organization |
+| Type | Category badge (Tailnet, GCP, Mullvad, AWS, Cloudflare, etc.) |
 | Action | Allow (green) or Block (red) |
 | Sent/Recv | Bytes transferred |
 | Duration | Connection lifetime |
@@ -102,13 +115,25 @@ Click **Block** on any connection to create a block rule.
 - Selection summary shows total connections and bandwidth for selected containers
 - Green dot = container has active traffic
 
+### World Map Tab
+
+OpenStreetMap-based geographic visualization powered by Leaflet:
+- Dark tile layer (CARTO Dark Matter) for readability
+- Server marker (blue) at your server's location
+- Remote endpoint markers colored by traffic category, sized by volume
+- Curved arc lines showing traffic direction and bandwidth
+- Blocked connections shown with dashed red lines
+- Interactive popups with domain, country, ISP, category, and traffic details
+- Auto-fits bounds to show all endpoints
+- Category legend with connection counts
+
 ### Network Map Tab
 
 Interactive Mermaid diagram showing:
-- All Docker containers (blue border)
-- Remote endpoints they connect to (gray border, red if blocked)
+- Containers grouped with remote endpoints by category (Tailnet, GCP, Mullvad, AWS, etc.)
+- Per-category traffic bandwidth breakdown cards
 - Traffic volume on each edge
-- Docker bridge network hub
+- Blocked connections highlighted in red
 - Respects container selection filter
 
 Expandable "Mermaid Source" section shows the raw diagram code.
@@ -150,7 +175,7 @@ Environment variables for the monitor container:
 │   └── internal/
 │       ├── capture/             # NFQUEUE packet capture
 │       ├── containers/          # Docker API container resolver
-│       ├── conntrack/           # DNS cache
+│       ├── conntrack/           # DNS cache + GeoIP resolver
 │       ├── rules/               # Rule engine + SQLite store
 │       ├── api/                 # REST API + WebSocket hub
 │       └── db/                  # Database init + migrations
@@ -160,6 +185,7 @@ Environment variables for the monitor container:
         ├── components/
         │   ├── ConnectionTable  # Live connections table
         │   ├── ContainerList    # Multi-select container sidebar
+        │   ├── WorldMap         # OpenStreetMap geographic visualization
         │   ├── NetworkMap       # Mermaid topology diagram
         │   ├── TrafficChart     # Bandwidth chart
         │   ├── RuleList         # Rules management

@@ -30,6 +30,8 @@ type Connection struct {
 	Org           string    `json:"org,omitempty"`
 	ASN           string    `json:"asn,omitempty"`
 	Category      string    `json:"category,omitempty"` // tailnet, gcp, mullvad, private, cloudflare, aws, internet
+	Lat           float64   `json:"lat,omitempty"`
+	Lon           float64   `json:"lon,omitempty"`
 }
 
 // PacketInfo holds parsed information from a captured packet

@@ -154,6 +154,8 @@ func (c *NFQueueCapture) GetConnections() []*Connection {
 				cp.Org = geo.Org
 				cp.ASN = geo.AS
 				cp.Category = geo.Category
+				cp.Lat = geo.Lat
+				cp.Lon = geo.Lon
 			}
 		}
 		conns = append(conns, &cp)
@@ -289,6 +291,8 @@ func (c *NFQueueCapture) handlePacket(attr nfqueue.Attribute) {
 		conn.Org = geo.Org
 		conn.ASN = geo.AS
 		conn.Category = geo.Category
+		conn.Lat = geo.Lat
+		conn.Lon = geo.Lon
 	}
 
 	if direction == "outbound" {
@@ -414,6 +418,8 @@ func (c *NFQueueCapture) geoEnrichLoop(ctx context.Context) {
 						conn.Org = geo.Org
 						conn.ASN = geo.AS
 						conn.Category = geo.Category
+						conn.Lat = geo.Lat
+						conn.Lon = geo.Lon
 					}
 				}
 			}

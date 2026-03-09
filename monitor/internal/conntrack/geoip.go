@@ -13,13 +13,15 @@ import (
 
 // GeoInfo holds geographic and ISP information for an IP
 type GeoInfo struct {
-	Country     string `json:"country"`
-	CountryCode string `json:"country_code"`
-	City        string `json:"city"`
-	ISP         string `json:"isp"`
-	Org         string `json:"org"`
-	AS          string `json:"as"`
-	Category    string `json:"category"` // "tailnet", "gcp", "mullvad", "private", "cloudflare", "amazon", "internet"
+	Country     string  `json:"country"`
+	CountryCode string  `json:"country_code"`
+	City        string  `json:"city"`
+	ISP         string  `json:"isp"`
+	Org         string  `json:"org"`
+	AS          string  `json:"as"`
+	Category    string  `json:"category"`
+	Lat         float64 `json:"lat"`
+	Lon         float64 `json:"lon"`
 }
 
 // GeoResolver resolves IP addresses to geographic information
@@ -33,7 +35,7 @@ type GeoResolver struct {
 func NewGeoResolver() *GeoResolver {
 	return &GeoResolver{
 		cache:   make(map[string]*GeoInfo),
-		limiter: make(chan struct{}, 2), // max 2 concurrent lookups
+		limiter: make(chan struct{}, 2),
 	}
 }
 
@@ -46,7 +48,6 @@ func (g *GeoResolver) Lookup(ip string) *GeoInfo {
 	}
 	g.mu.RUnlock()
 
-	// Check if it's a known network by IP range first
 	info := g.classifyByRange(ip)
 	if info != nil {
 		g.mu.Lock()
@@ -55,12 +56,9 @@ func (g *GeoResolver) Lookup(ip string) *GeoInfo {
 		return info
 	}
 
-	// Async lookup via ip-api.com (don't block packet processing)
 	go g.fetchAndCache(ip)
 
-	return &GeoInfo{
-		Category: "resolving",
-	}
+	return &GeoInfo{Category: "resolving"}
 }
 
 // GetCachedInfo returns cached info without triggering a lookup
@@ -79,29 +77,20 @@ func (g *GeoResolver) classifyByRange(ipStr string) *GeoInfo {
 		return nil
 	}
 
-	// Tailscale: 100.64.0.0/10
 	if isInCIDR(ip, "100.64.0.0/10") {
 		return &GeoInfo{
-			Category:    "tailnet",
-			Org:         "Tailscale",
-			ISP:         "Tailscale",
-			Country:     "Tailnet",
-			CountryCode: "TS",
+			Category: "tailnet", Org: "Tailscale", ISP: "Tailscale",
+			Country: "Tailnet", CountryCode: "TS",
 		}
 	}
 
-	// Private networks
 	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 		return &GeoInfo{
-			Category:    "private",
-			Org:         "Private Network",
-			ISP:         "Local",
-			Country:     "Local",
-			CountryCode: "LO",
+			Category: "private", Org: "Private Network", ISP: "Local",
+			Country: "Local", CountryCode: "LO",
 		}
 	}
 
-	// Mullvad exit IPs: known ranges (common)
 	mullvadRanges := []string{
 		"185.213.154.0/24", "185.65.135.0/24", "198.54.133.0/24",
 		"146.70.0.0/16", "193.27.12.0/24", "141.98.252.0/23",
@@ -109,16 +98,12 @@ func (g *GeoResolver) classifyByRange(ipStr string) *GeoInfo {
 	for _, cidr := range mullvadRanges {
 		if isInCIDR(ip, cidr) {
 			return &GeoInfo{
-				Category:    "mullvad",
-				Org:         "Mullvad VPN",
-				ISP:         "Mullvad VPN",
-				Country:     "VPN",
-				CountryCode: "VPN",
+				Category: "mullvad", Org: "Mullvad VPN", ISP: "Mullvad VPN",
+				Country: "VPN", CountryCode: "VPN",
 			}
 		}
 	}
 
-	// GCP ranges (common)
 	gcpRanges := []string{
 		"34.0.0.0/8", "35.184.0.0/13", "35.192.0.0/12",
 		"35.208.0.0/12", "35.224.0.0/12", "35.240.0.0/13",
@@ -127,11 +112,8 @@ func (g *GeoResolver) classifyByRange(ipStr string) *GeoInfo {
 	for _, cidr := range gcpRanges {
 		if isInCIDR(ip, cidr) {
 			return &GeoInfo{
-				Category:    "gcp",
-				Org:         "Google Cloud Platform",
-				ISP:         "Google",
-				Country:     "Cloud",
-				CountryCode: "GCP",
+				Category: "gcp", Org: "Google Cloud Platform", ISP: "Google",
+				Country: "Cloud", CountryCode: "GCP",
 			}
 		}
 	}
@@ -140,25 +122,25 @@ func (g *GeoResolver) classifyByRange(ipStr string) *GeoInfo {
 }
 
 type ipAPIResponse struct {
-	Status      string `json:"status"`
-	Country     string `json:"country"`
-	CountryCode string `json:"countryCode"`
-	City        string `json:"city"`
-	ISP         string `json:"isp"`
-	Org         string `json:"org"`
-	AS          string `json:"as"`
+	Status      string  `json:"status"`
+	Country     string  `json:"country"`
+	CountryCode string  `json:"countryCode"`
+	City        string  `json:"city"`
+	ISP         string  `json:"isp"`
+	Org         string  `json:"org"`
+	AS          string  `json:"as"`
+	Lat         float64 `json:"lat"`
+	Lon         float64 `json:"lon"`
 }
 
 func (g *GeoResolver) fetchAndCache(ip string) {
-	// Rate limit
 	select {
 	case g.limiter <- struct{}{}:
 		defer func() { <-g.limiter }()
 	default:
-		return // skip if too many concurrent requests
+		return
 	}
 
-	// Check cache again
 	g.mu.RLock()
 	if _, ok := g.cache[ip]; ok {
 		g.mu.RUnlock()
@@ -167,7 +149,7 @@ func (g *GeoResolver) fetchAndCache(ip string) {
 	g.mu.RUnlock()
 
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://ip-api.com/json/%s?fields=status,country,countryCode,city,isp,org,as", ip))
+	resp, err := client.Get(fmt.Sprintf("http://ip-api.com/json/%s?fields=status,country,countryCode,city,isp,org,as,lat,lon", ip))
 	if err != nil {
 		log.Printf("geoip: lookup failed for %s: %v", ip, err)
 		return
@@ -191,6 +173,8 @@ func (g *GeoResolver) fetchAndCache(ip string) {
 		Org:         result.Org,
 		AS:          result.AS,
 		Category:    classifyByOrg(result.ISP, result.Org, result.AS),
+		Lat:         result.Lat,
+		Lon:         result.Lon,
 	}
 
 	g.mu.Lock()
@@ -231,12 +215,4 @@ func isInCIDR(ip net.IP, cidr string) bool {
 		return false
 	}
 	return network.Contains(ip)
-}
-
-// BulkLookup triggers lookups for multiple IPs
-func (g *GeoResolver) BulkLookup(ips []string) {
-	for _, ip := range ips {
-		g.Lookup(ip)
-		time.Sleep(50 * time.Millisecond) // rate limit
-	}
 }

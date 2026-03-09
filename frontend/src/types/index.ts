@@ -21,6 +21,8 @@ export interface Connection {
   org?: string
   asn?: string
   category?: string // tailnet, gcp, mullvad, private, cloudflare, aws, azure, internet
+  lat?: number
+  lon?: number
 }
 
 export interface Container {
