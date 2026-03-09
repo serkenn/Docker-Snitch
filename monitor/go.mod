@@ -1,3 +1,3 @@
 module github.com/serken/docker-snitch
 
-go 1.22
+go 1.24

@@ -5,7 +5,8 @@ import (
 	"log"
 	"sync"
 
-	"github.com/docker/docker/api/types"
+	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 )
@@ -41,12 +42,9 @@ func NewResolver() (*Resolver, error) {
 
 // Start begins watching for container changes
 func (r *Resolver) Start(ctx context.Context) error {
-	// Initial refresh
 	if err := r.refresh(ctx); err != nil {
 		return err
 	}
-
-	// Watch for events
 	go r.watch(ctx)
 	return nil
 }
@@ -82,7 +80,6 @@ func (r *Resolver) GetContainers() []*ContainerInfo {
 }
 
 func (r *Resolver) refresh(ctx context.Context) error {
-	// List all networks and their containers
 	networks, err := r.cli.NetworkList(ctx, network.ListOptions{})
 	if err != nil {
 		return err
@@ -95,7 +92,6 @@ func (r *Resolver) refresh(ctx context.Context) error {
 		if net.Driver != "bridge" {
 			continue
 		}
-		// Inspect to get container endpoints
 		netDetail, err := r.cli.NetworkInspect(ctx, net.ID, network.InspectOptions{})
 		if err != nil {
 			log.Printf("network inspect %s: %v", net.Name, err)
@@ -105,7 +101,6 @@ func (r *Resolver) refresh(ctx context.Context) error {
 			if endpoint.IPv4Address == "" {
 				continue
 			}
-			// Strip CIDR notation
 			ip := stripCIDR(endpoint.IPv4Address)
 			info := &ContainerInfo{
 				ID:   endpoint.EndpointID,
@@ -117,8 +112,7 @@ func (r *Resolver) refresh(ctx context.Context) error {
 		}
 	}
 
-	// Also get image info from container list
-	containerList, err := r.cli.ContainerList(ctx, types.ContainerListOptions{})
+	containerList, err := r.cli.ContainerList(ctx, containertypes.ListOptions{})
 	if err == nil {
 		for _, c := range containerList {
 			name := ""
@@ -144,7 +138,7 @@ func (r *Resolver) refresh(ctx context.Context) error {
 }
 
 func (r *Resolver) watch(ctx context.Context) {
-	eventsCh, errCh := r.cli.Events(ctx, types.EventsOptions{})
+	eventsCh, errCh := r.cli.Events(ctx, events.ListOptions{})
 	for {
 		select {
 		case <-ctx.Done():
@@ -156,7 +150,7 @@ func (r *Resolver) watch(ctx context.Context) {
 			log.Printf("docker events error: %v", err)
 			return
 		case event := <-eventsCh:
-			if event.Type == "container" || event.Type == "network" {
+			if event.Type == events.ContainerEventType || event.Type == events.NetworkEventType {
 				if err := r.refresh(ctx); err != nil {
 					log.Printf("container refresh error: %v", err)
 				}
