@@ -18,7 +18,7 @@ Little Snitch inspired network monitor for Docker containers. Captures, visualiz
 ┌────────────┐     ┌─────────────────────────────────────┐
 │  Frontend   │────>│  Monitor (Go)                       │
 │  React/Vite │ WS  │  ┌─────────┐  ┌──────────────────┐ │
-│  port 8080  │────>│  │ REST API │  │ NFQUEUE Capture  │ │
+│  port 9080  │────>│  │ REST API │  │ NFQUEUE Capture  │ │
 └────────────┘     │  └─────────┘  └──────────────────┘ │
                     │  ┌─────────┐  ┌──────────────────┐ │
                     │  │ Rules   │  │ Container Resolve │ │
@@ -61,7 +61,7 @@ Little Snitch inspired network monitor for Docker containers. Captures, visualiz
 docker compose up --build
 ```
 
-Open **http://localhost:8080** in your browser.
+Open **http://localhost:9080** in your browser.
 
 ### Test with sample containers
 
