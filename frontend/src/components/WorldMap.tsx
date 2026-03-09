@@ -563,6 +563,10 @@ export function WorldMap({ connections }: Props) {
             <span style={styles.legendLineDash} />
             <span style={styles.legendLabel}>Idle (0 DL/UL)</span>
           </div>
+          <div style={styles.legendItem}>
+            <span style={styles.legendLineRed} />
+            <span style={styles.legendLabel}>Blocked</span>
+          </div>
         </div>
       </div>
 
@@ -699,6 +703,7 @@ const styles: Record<string, React.CSSProperties> = {
   legendCount: { color: '#484f58' },
   legendLine: { width: 20, height: 2, background: '#8b949e', borderRadius: 1, flexShrink: 0 },
   legendLineDash: { width: 20, height: 0, borderTop: '2px dashed #8b949e', flexShrink: 0 },
+  legendLineRed: { width: 20, height: 0, borderTop: '2px dashed #f85149', flexShrink: 0 },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
   th: {
     textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #30363d',

@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef } from 'react'
+import { useMemo, useEffect, useRef, useState, useCallback } from 'react'
 import type { Connection, Container } from '../types'
 
 interface Props {
@@ -37,6 +37,37 @@ const CATEGORY_STYLES: Record<string, { stroke: string; fill: string; label: str
 
 export function NetworkMap({ connections, containers }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const dragRef = useRef<{ dragging: boolean; startX: number; startY: number; startPanX: number; startPanY: number }>({ dragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 })
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault()
+    const delta = e.deltaY > 0 ? 0.9 : 1.1
+    setZoom(z => Math.min(5, Math.max(0.2, z * delta)))
+  }, [])
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    dragRef.current = { dragging: true, startX: e.clientX, startY: e.clientY, startPanX: pan.x, startPanY: pan.y }
+  }, [pan])
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!dragRef.current.dragging) return
+    const dx = e.clientX - dragRef.current.startX
+    const dy = e.clientY - dragRef.current.startY
+    setPan({ x: dragRef.current.startPanX + dx, y: dragRef.current.startPanY + dy })
+  }, [])
+
+  const handleMouseUp = useCallback(() => {
+    dragRef.current.dragging = false
+  }, [])
+
+  const resetView = useCallback(() => {
+    setZoom(1)
+    setPan({ x: 0, y: 0 })
+  }, [])
 
   // Aggregate data for the map
   const { mermaidCode, categorySummary } = useMemo(() => {
@@ -249,9 +280,8 @@ export function NetworkMap({ connections, containers }: Props) {
           containerRef.current.innerHTML = svg
           const svgEl = containerRef.current.querySelector('svg')
           if (svgEl) {
-            svgEl.style.maxWidth = '100%'
+            svgEl.style.maxWidth = 'none'
             svgEl.style.height = 'auto'
-            svgEl.style.minHeight = '300px'
           }
         }
       } catch (err) {
@@ -301,10 +331,37 @@ export function NetworkMap({ connections, containers }: Props) {
         ))}
       </div>
 
-      {/* Mermaid diagram */}
+      {/* Mermaid diagram with pan/zoom */}
       <div style={styles.container}>
-        <div style={styles.header}>Network Topology</div>
-        <div ref={containerRef} style={styles.mapArea} />
+        <div style={styles.headerRow}>
+          <div style={styles.header}>Network Topology</div>
+          <div style={styles.zoomControls}>
+            <button style={styles.zoomBtn} onClick={() => setZoom(z => Math.min(5, z * 1.25))} title="Zoom in">+</button>
+            <span style={styles.zoomLabel}>{Math.round(zoom * 100)}%</span>
+            <button style={styles.zoomBtn} onClick={() => setZoom(z => Math.max(0.2, z * 0.8))} title="Zoom out">-</button>
+            <button style={styles.resetBtn} onClick={resetView} title="Reset view">Reset</button>
+          </div>
+        </div>
+        <div
+          ref={wrapperRef}
+          style={styles.mapArea}
+          onWheel={handleWheel}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+        >
+          <div
+            ref={containerRef}
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transformOrigin: 'center center',
+              transition: dragRef.current.dragging ? 'none' : 'transform 0.1s ease-out',
+              cursor: dragRef.current.dragging ? 'grabbing' : 'grab',
+              display: 'inline-block',
+            }}
+          />
+        </div>
         <details style={styles.details}>
           <summary style={styles.detailsSummary}>Mermaid Source</summary>
           <pre style={styles.code}>{mermaidCode}</pre>
@@ -342,11 +399,26 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#161b22', border: '1px solid #30363d', borderRadius: 8,
     padding: 16, marginBottom: 16,
   },
-  header: { fontSize: 14, fontWeight: 600, color: '#c9d1d9', marginBottom: 12 },
+  headerRow: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12,
+  },
+  header: { fontSize: 14, fontWeight: 600, color: '#c9d1d9' },
+  zoomControls: { display: 'flex', alignItems: 'center', gap: 4 },
+  zoomBtn: {
+    width: 28, height: 28, background: '#21262d', border: '1px solid #30363d', borderRadius: 6,
+    color: '#c9d1d9', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    lineHeight: 1,
+  },
+  zoomLabel: { fontSize: 11, color: '#484f58', minWidth: 40, textAlign: 'center' as const },
+  resetBtn: {
+    padding: '4px 10px', background: '#21262d', border: '1px solid #30363d', borderRadius: 6,
+    color: '#8b949e', fontSize: 11, cursor: 'pointer', marginLeft: 4,
+  },
   mapArea: {
-    background: '#0d1117', borderRadius: 8, padding: 16,
-    minHeight: 300, overflow: 'auto',
+    background: '#0d1117', borderRadius: 8,
+    height: 500, overflow: 'hidden', position: 'relative' as const,
     display: 'flex', justifyContent: 'center', alignItems: 'center',
+    userSelect: 'none' as const,
   },
   empty: {
     background: '#161b22', border: '1px solid #30363d', borderRadius: 8,
