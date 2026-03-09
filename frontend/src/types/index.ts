@@ -87,6 +87,20 @@ export interface TorrentInfo {
   uploaded: number
 }
 
+export interface ServerLocation {
+  ip: string
+  geo: {
+    country: string
+    country_code: string
+    city: string
+    isp: string
+    org: string
+    as: string
+    lat: number
+    lon: number
+  } | null
+}
+
 export interface Stats {
   active_connections: number
   containers: number

@@ -1,6 +1,6 @@
 import { useMemo, useEffect, useRef, useState } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Polyline, Popup, Tooltip, useMap } from 'react-leaflet'
-import type { Connection, TorrentPeer } from '../types'
+import type { Connection, TorrentPeer, ServerLocation } from '../types'
 import { api } from '../api/client'
 import 'leaflet/dist/leaflet.css'
 
@@ -97,6 +97,12 @@ interface MapNode {
 
 export function WorldMap({ connections }: Props) {
   const [peers, setPeers] = useState<TorrentPeer[]>([])
+  const [serverLoc, setServerLoc] = useState<ServerLocation | null>(null)
+
+  // Fetch server location once
+  useEffect(() => {
+    api.getServerLocation().then(setServerLoc).catch(() => {})
+  }, [])
 
   // Poll peers every 5s
   useEffect(() => {
@@ -110,16 +116,12 @@ export function WorldMap({ connections }: Props) {
   }, [])
 
   const mapData = useMemo(() => {
-    // Detect server location from a GCP or direct connection
-    let serverLat = 35.68  // default: Tokyo
-    let serverLon = 139.69
-    for (const c of connections) {
-      if (c.category === 'gcp' && c.lat && c.lon) {
-        serverLat = c.lat
-        serverLon = c.lon
-        break
-      }
-    }
+    // Use server's actual location from API, fallback to 0,0
+    let serverLat = serverLoc?.geo?.lat ?? 0
+    let serverLon = serverLoc?.geo?.lon ?? 0
+    const serverCity = serverLoc?.geo?.city ?? ''
+    const serverCountry = serverLoc?.geo?.country ?? ''
+    const serverIP = serverLoc?.ip ?? ''
 
     const nodes: MapNode[] = []
     const arcs: { from: [number, number]; to: [number, number]; color: string; weight: number; dash?: string; label?: string }[] = []
@@ -342,8 +344,8 @@ export function WorldMap({ connections }: Props) {
     const totalDlSpeed = peers.reduce((s, p) => s + p.dl_speed, 0)
     const totalUlSpeed = peers.reduce((s, p) => s + p.up_speed, 0)
 
-    return { serverLat, serverLon, nodes, arcs, allPoints, totalPeers, totalDl, totalUl, totalDlSpeed, totalUlSpeed }
-  }, [connections, peers])
+    return { serverLat, serverLon, serverCity, serverCountry, serverIP, nodes, arcs, allPoints, totalPeers, totalDl, totalUl, totalDlSpeed, totalUlSpeed }
+  }, [connections, peers, serverLoc])
 
   if (mapData.nodes.length === 0 && peers.length === 0) {
     return (
@@ -449,7 +451,8 @@ export function WorldMap({ connections }: Props) {
               <Popup>
                 <div style={styles.popup}>
                   <strong style={{ color: CATEGORY_COLORS.gcp }}>GCP Server</strong><br />
-                  Docker Host<br />
+                  {mapData.serverCity && mapData.serverCountry && <span>{mapData.serverCity}, {mapData.serverCountry}<br /></span>}
+                  {mapData.serverIP && <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{mapData.serverIP}<br /></span>}
                   {mapData.nodes.length} endpoints visible
                 </div>
               </Popup>

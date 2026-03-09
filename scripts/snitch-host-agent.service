@@ -1,0 +1,15 @@
+[Unit]
+Description=Docker Snitch Host Agent - monitors system-level network traffic
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/snitch-host-agent
+Environment=SNITCH_MONITOR_URL=http://127.0.0.1:9645
+Environment=SNITCH_POLL_INTERVAL=2
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

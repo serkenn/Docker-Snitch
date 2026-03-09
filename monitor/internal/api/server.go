@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/serken/docker-snitch/internal/capture"
+	"github.com/serken/docker-snitch/internal/conntrack"
 	"github.com/serken/docker-snitch/internal/containers"
 	"github.com/serken/docker-snitch/internal/qbit"
 	"github.com/serken/docker-snitch/internal/rules"
@@ -23,10 +27,13 @@ type Server struct {
 	engine    *rules.Engine
 	hub       *WSHub
 	qbit      *qbit.Client
+	geo       *conntrack.GeoResolver
+	hostConns map[string]*capture.Connection
+	hostMu    sync.RWMutex
 }
 
 // NewServer creates a new API server
-func NewServer(port int, cap *capture.NFQueueCapture, resolver *containers.Resolver, ruleStore *rules.Store, engine *rules.Engine, hub *WSHub, qbitClient *qbit.Client) *Server {
+func NewServer(port int, cap *capture.NFQueueCapture, resolver *containers.Resolver, ruleStore *rules.Store, engine *rules.Engine, hub *WSHub, qbitClient *qbit.Client, geo *conntrack.GeoResolver) *Server {
 	return &Server{
 		port:      port,
 		capture:   cap,
@@ -35,6 +42,8 @@ func NewServer(port int, cap *capture.NFQueueCapture, resolver *containers.Resol
 		engine:    engine,
 		hub:       hub,
 		qbit:      qbitClient,
+		geo:       geo,
+		hostConns: make(map[string]*capture.Connection),
 	}
 }
 
@@ -50,6 +59,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/peers", s.handlePeers)
 	mux.HandleFunc("/api/torrents", s.handleTorrents)
+	mux.HandleFunc("/api/server-location", s.handleServerLocation)
+	mux.HandleFunc("/api/host-events", s.handleHostEvents)
 	mux.HandleFunc("/api/ws", s.hub.HandleWS)
 
 	// CORS middleware
@@ -78,6 +89,15 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	if conns == nil {
 		conns = make([]*capture.Connection, 0)
 	}
+
+	// Append host connections
+	s.hostMu.RLock()
+	for _, hc := range s.hostConns {
+		cp := *hc
+		conns = append(conns, &cp)
+	}
+	s.hostMu.RUnlock()
+
 	writeJSON(w, conns)
 }
 
@@ -236,6 +256,168 @@ func (s *Server) handleTorrents(w http.ResponseWriter, r *http.Request) {
 		torrents = make([]qbit.TorrentInfo, 0)
 	}
 	writeJSON(w, torrents)
+}
+
+// hostEvent is the JSON format sent by the host agent
+type hostEvent struct {
+	Protocol  string `json:"protocol"`
+	SrcIP     string `json:"src_ip"`
+	DstIP     string `json:"dst_ip"`
+	SrcPort   uint16 `json:"src_port"`
+	DstPort   uint16 `json:"dst_port"`
+	BytesSent uint64 `json:"bytes_sent"`
+	BytesRecv uint64 `json:"bytes_recv"`
+	State     string `json:"state"`
+	Process   string `json:"process"`
+}
+
+func (s *Server) handleHostEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	var events []hostEvent
+	if err := json.NewDecoder(r.Body).Decode(&events); err != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+
+	s.hostMu.Lock()
+	for _, ev := range events {
+		// Skip private/loopback traffic and monitor's own traffic
+		srcIP := net.ParseIP(ev.SrcIP)
+		if srcIP == nil {
+			continue
+		}
+		if srcIP.IsLoopback() {
+			continue
+		}
+		// Skip monitor ports
+		if ev.SrcPort == 9645 || ev.DstPort == 9645 || ev.SrcPort == 9080 || ev.DstPort == 9080 {
+			continue
+		}
+
+		key := fmt.Sprintf("host|%s|%s:%d->%s:%d", ev.Protocol, ev.SrcIP, ev.SrcPort, ev.DstIP, ev.DstPort)
+
+		conn, exists := s.hostConns[key]
+		if !exists {
+			// Determine direction: if src is a local IP, it's outbound
+			direction := "outbound"
+			remoteIP := ev.DstIP
+			remotePort := ev.DstPort
+			containerIP := ev.SrcIP
+			if srcIP != nil && !isLocalIP(srcIP) {
+				direction = "inbound"
+				remoteIP = ev.SrcIP
+				remotePort = ev.SrcPort
+				containerIP = ev.DstIP
+			}
+
+			procName := ev.Process
+			if procName == "" {
+				procName = "host"
+			}
+
+			conn = &capture.Connection{
+				ID:            key,
+				ContainerName: fmt.Sprintf("[%s]", procName),
+				ContainerIP:   containerIP,
+				RemoteIP:      remoteIP,
+				RemotePort:    remotePort,
+				LocalPort:     ev.SrcPort,
+				Protocol:      ev.Protocol,
+				Direction:     direction,
+				Action:        "allow",
+				BytesSent:     ev.BytesSent,
+				BytesRecv:     ev.BytesRecv,
+				StartTime:     time.Now(),
+				LastSeen:      time.Now(),
+				Active:        true,
+			}
+
+			// GeoIP resolve
+			if geo := s.geo.Lookup(remoteIP); geo != nil && geo.Category != "resolving" {
+				conn.Country = geo.Country
+				conn.CountryCode = geo.CountryCode
+				conn.City = geo.City
+				conn.ISP = geo.ISP
+				conn.Org = geo.Org
+				conn.ASN = geo.AS
+				conn.Category = geo.Category
+				conn.Lat = geo.Lat
+				conn.Lon = geo.Lon
+			}
+
+			s.hostConns[key] = conn
+
+			// Broadcast new event
+			connCopy := *conn
+			s.hub.Broadcast(Event{Type: "connection_new", Data: &connCopy})
+		} else {
+			changed := conn.BytesSent != ev.BytesSent || conn.BytesRecv != ev.BytesRecv
+			conn.BytesSent = ev.BytesSent
+			conn.BytesRecv = ev.BytesRecv
+			conn.LastSeen = time.Now()
+			conn.Active = true
+
+			// Re-enrich if still resolving
+			if conn.Category == "" || conn.Category == "resolving" {
+				if geo := s.geo.GetCachedInfo(conn.RemoteIP); geo != nil {
+					conn.Country = geo.Country
+					conn.CountryCode = geo.CountryCode
+					conn.City = geo.City
+					conn.ISP = geo.ISP
+					conn.Org = geo.Org
+					conn.ASN = geo.AS
+					conn.Category = geo.Category
+					conn.Lat = geo.Lat
+					conn.Lon = geo.Lon
+				}
+			}
+
+			if changed {
+				connCopy := *conn
+				s.hub.Broadcast(Event{Type: "connection_update", Data: &connCopy})
+			}
+		}
+	}
+
+	// Clean up stale host connections (not seen in 30s)
+	now := time.Now()
+	for key, conn := range s.hostConns {
+		if now.Sub(conn.LastSeen) > 30*time.Second {
+			conn.Active = false
+			connCopy := *conn
+			s.hub.Broadcast(Event{Type: "connection_closed", Data: &connCopy})
+			delete(s.hostConns, key)
+		}
+	}
+	s.hostMu.Unlock()
+
+	w.WriteHeader(200)
+	writeJSON(w, map[string]int{"accepted": len(events)})
+}
+
+func isLocalIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return true
+	}
+	// Tailscale CGNAT range
+	_, tailnet, _ := net.ParseCIDR("100.64.0.0/10")
+	if tailnet.Contains(ip) {
+		return true
+	}
+	return false
+}
+
+func (s *Server) handleServerLocation(w http.ResponseWriter, r *http.Request) {
+	loc := s.geo.GetServerLocation()
+	if loc == nil {
+		writeJSON(w, map[string]interface{}{"ip": "", "geo": nil})
+		return
+	}
+	writeJSON(w, loc)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

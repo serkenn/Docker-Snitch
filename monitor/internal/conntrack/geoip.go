@@ -24,19 +24,89 @@ type GeoInfo struct {
 	Lon         float64 `json:"lon"`
 }
 
+// ServerLocation holds the server's own public IP and geo info
+type ServerLocation struct {
+	IP  string   `json:"ip"`
+	Geo *GeoInfo `json:"geo"`
+}
+
 // GeoResolver resolves IP addresses to geographic information
 type GeoResolver struct {
-	cache   map[string]*GeoInfo
-	mu      sync.RWMutex
-	limiter chan struct{}
+	cache    map[string]*GeoInfo
+	mu       sync.RWMutex
+	limiter  chan struct{}
+	serverLoc *ServerLocation
+	serverMu  sync.RWMutex
 }
 
 // NewGeoResolver creates a new GeoIP resolver
 func NewGeoResolver() *GeoResolver {
-	return &GeoResolver{
+	g := &GeoResolver{
 		cache:   make(map[string]*GeoInfo),
 		limiter: make(chan struct{}, 2),
 	}
+	go g.resolveServerLocation()
+	return g
+}
+
+// GetServerLocation returns the server's public IP and geo info
+func (g *GeoResolver) GetServerLocation() *ServerLocation {
+	g.serverMu.RLock()
+	defer g.serverMu.RUnlock()
+	return g.serverLoc
+}
+
+func (g *GeoResolver) resolveServerLocation() {
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// Get public IP
+	resp, err := client.Get("https://api.ipify.org")
+	if err != nil {
+		log.Printf("geoip: failed to get public IP: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	ipBytes := make([]byte, 64)
+	n, _ := resp.Body.Read(ipBytes)
+	publicIP := strings.TrimSpace(string(ipBytes[:n]))
+	if publicIP == "" {
+		return
+	}
+	log.Printf("geoip: server public IP is %s", publicIP)
+
+	// GeoIP resolve it
+	resp2, err := client.Get(fmt.Sprintf("http://ip-api.com/json/%s?fields=status,country,countryCode,city,isp,org,as,lat,lon", publicIP))
+	if err != nil {
+		log.Printf("geoip: failed to resolve server IP: %v", err)
+		return
+	}
+	defer resp2.Body.Close()
+
+	var result ipAPIResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&result); err != nil || result.Status != "success" {
+		return
+	}
+
+	loc := &ServerLocation{
+		IP: publicIP,
+		Geo: &GeoInfo{
+			Country:     result.Country,
+			CountryCode: result.CountryCode,
+			City:        result.City,
+			ISP:         result.ISP,
+			Org:         result.Org,
+			AS:          result.AS,
+			Category:    "server",
+			Lat:         result.Lat,
+			Lon:         result.Lon,
+		},
+	}
+
+	g.serverMu.Lock()
+	g.serverLoc = loc
+	g.serverMu.Unlock()
+	log.Printf("geoip: server location: %s, %s (%.2f, %.2f)", result.City, result.Country, result.Lat, result.Lon)
 }
 
 // Lookup returns geo info for an IP, using cache when available

@@ -99,7 +99,7 @@ func main() {
 	}
 
 	// API server
-	server := api.NewServer(apiPort, nfq, resolver, ruleStore, ruleEngine, hub, qbitClient)
+	server := api.NewServer(apiPort, nfq, resolver, ruleStore, ruleEngine, hub, qbitClient, geoResolver)
 	go func() {
 		if err := server.Start(); err != nil {
 			log.Printf("api server: %v", err)
