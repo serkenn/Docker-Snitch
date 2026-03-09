@@ -62,21 +62,21 @@ function arcPoints(
   return points
 }
 
-// Auto-fit map bounds
-function FitBounds({ points }: { points: [number, number][] }) {
+// Fit map bounds ONCE on first meaningful data, then never again
+const fittedGlobal = { done: false }
+function FitBoundsOnce({ points }: { points: [number, number][] }) {
   const map = useMap()
-  const fitted = useRef(false)
 
   useEffect(() => {
-    if (points.length > 1 && !fitted.current) {
+    if (points.length > 1 && !fittedGlobal.done) {
       const L = (window as any).L
       if (L) {
         const bounds = L.latLngBounds(points)
         map.fitBounds(bounds, { padding: [50, 50], maxZoom: 5 })
-        fitted.current = true
+        fittedGlobal.done = true
       }
     }
-  }, [points, map])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- intentionally run once
 
   return null
 }
@@ -124,7 +124,7 @@ export function WorldMap({ connections }: Props) {
     const serverIP = serverLoc?.ip ?? ''
 
     const nodes: MapNode[] = []
-    const arcs: { from: [number, number]; to: [number, number]; color: string; weight: number; dash?: string; label?: string }[] = []
+    const arcs: { from: [number, number]; to: [number, number]; color: string; weight: number; dash?: string; popupLines: string[] }[] = []
     const allPoints: [number, number][] = [[serverLat, serverLon]]
 
     // --- Mullvad VPN exit nodes (from NFQUEUE connections) ---
@@ -210,7 +210,13 @@ export function WorldMap({ connections }: Props) {
         to: [m.lat, m.lon],
         color: CATEGORY_COLORS.mullvad,
         weight: Math.max(3, Math.min(8, m.bytes / 1048576)),
-        label: `VPN ${formatBytes(m.bytes)}`,
+        popupLines: [
+          'GCP Server → Mullvad VPN Exit',
+          `WireGuard Tunnel`,
+          `Traffic: ${formatBytes(m.bytes)}`,
+          `${m.count} connections`,
+          `IPs: ${m.ips.join(', ')}`,
+        ],
       })
     }
 
@@ -287,6 +293,14 @@ export function WorldMap({ connections }: Props) {
         color: CATEGORY_COLORS.peer,
         weight: Math.max(1, Math.min(4, (totalBytes / 1048576) * 0.5)),
         dash: pg.dlSpeed > 0 ? undefined : '4 4',
+        popupLines: [
+          mullvadExitPos ? 'Mullvad VPN → Torrent Peer' : 'Server → Torrent Peer',
+          countries,
+          `DL: ${formatBytes(pg.downloaded)} (${formatSpeed(pg.dlSpeed)})`,
+          `UL: ${formatBytes(pg.uploaded)} (${formatSpeed(pg.upSpeed)})`,
+          `${pg.count} peer${pg.count > 1 ? 's' : ''}`,
+          ...(pg.ips.length <= 3 ? pg.ips : [...pg.ips.slice(0, 3), `+${pg.ips.length - 3} more`]),
+        ].filter(Boolean),
       })
     }
 
@@ -310,6 +324,12 @@ export function WorldMap({ connections }: Props) {
         to: [t.lat, t.lon],
         color: CATEGORY_COLORS.tailnet,
         weight: Math.max(2, Math.min(6, t.bytes / 1048576)),
+        popupLines: [
+          `GCP Server → ${t.label}`,
+          'Tailscale WireGuard',
+          `Traffic: ${formatBytes(t.bytes)}`,
+          `${t.count} connections`,
+        ],
       })
     }
 
@@ -334,6 +354,12 @@ export function WorldMap({ connections }: Props) {
         to: [d.lat, d.lon],
         color,
         weight: Math.max(1.5, Math.min(5, d.bytes / 1048576)),
+        popupLines: [
+          `GCP Server → ${d.label}`,
+          [d.country, d.isp].filter(Boolean).join(' - '),
+          `Traffic: ${formatBytes(d.bytes)}`,
+          `${d.count} connections`,
+        ].filter(Boolean),
       })
     }
 
@@ -418,9 +444,9 @@ export function WorldMap({ connections }: Props) {
               attribution='&copy; CARTO'
             />
 
-            <FitBounds points={mapData.allPoints} />
+            <FitBoundsOnce points={mapData.allPoints} />
 
-            {/* Arc lines */}
+            {/* Arc lines - clickable with popup */}
             {mapData.arcs.map((arc, i) => (
               <Polyline
                 key={`arc-${i}`}
@@ -431,7 +457,18 @@ export function WorldMap({ connections }: Props) {
                   opacity: 0.55,
                   dashArray: arc.dash,
                 }}
-              />
+                eventHandlers={{ mouseover: (e) => { e.target.setStyle({ opacity: 0.9, weight: arc.weight + 2 }) }, mouseout: (e) => { e.target.setStyle({ opacity: 0.55, weight: arc.weight }) } }}
+              >
+                <Popup>
+                  <div style={styles.popup}>
+                    {arc.popupLines.map((line, j) => (
+                      <span key={j} style={j === 0 ? { fontWeight: 700, color: arc.color } : undefined}>
+                        {line}<br />
+                      </span>
+                    ))}
+                  </div>
+                </Popup>
+              </Polyline>
             ))}
 
             {/* Server marker (GCP) */}
@@ -518,6 +555,14 @@ export function WorldMap({ connections }: Props) {
               </span>
             </div>
           ))}
+          <div style={styles.legendItem}>
+            <span style={styles.legendLine} />
+            <span style={styles.legendLabel}>Active transfer</span>
+          </div>
+          <div style={styles.legendItem}>
+            <span style={styles.legendLineDash} />
+            <span style={styles.legendLabel}>Idle (0 DL/UL)</span>
+          </div>
         </div>
       </div>
 
@@ -652,6 +697,8 @@ const styles: Record<string, React.CSSProperties> = {
   legendDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0 },
   legendLabel: { fontSize: 11, color: '#8b949e' },
   legendCount: { color: '#484f58' },
+  legendLine: { width: 20, height: 2, background: '#8b949e', borderRadius: 1, flexShrink: 0 },
+  legendLineDash: { width: 20, height: 0, borderTop: '2px dashed #8b949e', flexShrink: 0 },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
   th: {
     textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #30363d',
