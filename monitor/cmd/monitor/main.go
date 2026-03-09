@@ -59,6 +59,9 @@ func main() {
 	// DNS cache
 	dnsCache := conntrack.NewDNSCache()
 
+	// GeoIP resolver
+	geoResolver := conntrack.NewGeoResolver()
+
 	// WebSocket hub
 	hub := api.NewWSHub()
 
@@ -71,7 +74,7 @@ func main() {
 	}
 
 	// Packet capture
-	nfq := capture.NewNFQueueCapture(uint16(queueNum), resolver, ruleEngine, dnsCache, eventHandler)
+	nfq := capture.NewNFQueueCapture(uint16(queueNum), resolver, ruleEngine, dnsCache, geoResolver, eventHandler)
 
 	// Setup iptables
 	if err := nfq.SetupIPTables(); err != nil {

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/serken/docker-snitch/internal/conntrack"
+
 	nfqueue "github.com/florianl/go-nfqueue/v2"
 )
 
@@ -40,6 +42,7 @@ type NFQueueCapture struct {
 	resolver     ContainerResolver
 	ruleChecker  RuleChecker
 	dnsResolver  DNSResolver
+	geoResolver  *conntrack.GeoResolver
 	handler      EventHandler
 	connections  map[string]*Connection
 	flowIndex    map[FlowKey]string // flow -> connection ID
@@ -48,12 +51,13 @@ type NFQueueCapture struct {
 }
 
 // NewNFQueueCapture creates a new NFQUEUE-based capture engine
-func NewNFQueueCapture(queueNum uint16, resolver ContainerResolver, ruleChecker RuleChecker, dnsResolver DNSResolver, handler EventHandler) *NFQueueCapture {
+func NewNFQueueCapture(queueNum uint16, resolver ContainerResolver, ruleChecker RuleChecker, dnsResolver DNSResolver, geoResolver *conntrack.GeoResolver, handler EventHandler) *NFQueueCapture {
 	return &NFQueueCapture{
 		queueNum:    queueNum,
 		resolver:    resolver,
 		ruleChecker: ruleChecker,
 		dnsResolver: dnsResolver,
+		geoResolver: geoResolver,
 		handler:     handler,
 		connections: make(map[string]*Connection),
 		flowIndex:   make(map[FlowKey]string),
@@ -62,10 +66,8 @@ func NewNFQueueCapture(queueNum uint16, resolver ContainerResolver, ruleChecker 
 
 // SetupIPTables adds the NFQUEUE rule to the DOCKER-USER chain
 func (c *NFQueueCapture) SetupIPTables() error {
-	// Create DOCKER-USER chain if it doesn't exist
 	exec.Command("iptables", "-N", "DOCKER-USER").Run()
 
-	// Add NFQUEUE rule
 	cmd := exec.Command("iptables", "-I", "DOCKER-USER", "-j", "NFQUEUE",
 		"--queue-num", fmt.Sprintf("%d", c.queueNum),
 		"--queue-bypass")
@@ -121,8 +123,8 @@ func (c *NFQueueCapture) Start(ctx context.Context) error {
 
 	log.Printf("nfqueue: listening on queue %d", c.queueNum)
 
-	// Connection cleanup goroutine
 	go c.cleanupLoop(ctx)
+	go c.geoEnrichLoop(ctx)
 
 	return nil
 }
@@ -142,6 +144,18 @@ func (c *NFQueueCapture) GetConnections() []*Connection {
 	conns := make([]*Connection, 0, len(c.connections))
 	for _, conn := range c.connections {
 		cp := *conn
+		// Enrich with latest geo info
+		if cp.Category == "" || cp.Category == "resolving" {
+			if geo := c.geoResolver.GetCachedInfo(cp.RemoteIP); geo != nil {
+				cp.Country = geo.Country
+				cp.CountryCode = geo.CountryCode
+				cp.City = geo.City
+				cp.ISP = geo.ISP
+				cp.Org = geo.Org
+				cp.ASN = geo.AS
+				cp.Category = geo.Category
+			}
+		}
 		conns = append(conns, &cp)
 	}
 	return conns
@@ -189,14 +203,12 @@ func (c *NFQueueCapture) handlePacket(attr nfqueue.Attribute) {
 		remoteIP = srcIP
 		direction = "inbound"
 	} else {
-		// Neither end is a container - accept and skip
 		if attr.PacketID != nil {
 			c.nf.SetVerdict(*attr.PacketID, nfqueue.NfAccept)
 		}
 		return
 	}
 
-	// Determine remote port based on direction
 	remotePort := pkt.DstPort
 	localPort := pkt.SrcPort
 	if direction == "inbound" {
@@ -204,10 +216,8 @@ func (c *NFQueueCapture) handlePacket(attr nfqueue.Attribute) {
 		localPort = pkt.DstPort
 	}
 
-	// Check rules
 	action := c.ruleChecker.Check(containerName, remoteIP, remotePort, pkt.Protocol, direction)
 
-	// Set verdict
 	if attr.PacketID != nil {
 		if action == "block" {
 			c.nf.SetVerdict(*attr.PacketID, nfqueue.NfDrop)
@@ -216,7 +226,6 @@ func (c *NFQueueCapture) handlePacket(attr nfqueue.Attribute) {
 		}
 	}
 
-	// Track connection
 	flow := FlowKey{
 		SrcIP:    containerIP,
 		DstIP:    remoteIP,
@@ -227,14 +236,12 @@ func (c *NFQueueCapture) handlePacket(attr nfqueue.Attribute) {
 
 	c.mu.Lock()
 
-	// Check if connection exists (forward or reverse)
 	connID, exists := c.flowIndex[flow]
 	if !exists {
 		connID, exists = c.flowIndex[flow.ReverseKey()]
 	}
 
 	if exists {
-		// Update existing connection
 		if conn, ok := c.connections[connID]; ok {
 			conn.LastSeen = time.Now()
 			if direction == "outbound" {
@@ -255,6 +262,9 @@ func (c *NFQueueCapture) handlePacket(attr nfqueue.Attribute) {
 
 	domain := c.dnsResolver.Lookup(remoteIP)
 
+	// Get geo info (may be async, returns "resolving" category initially)
+	geo := c.geoResolver.Lookup(remoteIP)
+
 	conn := &Connection{
 		ID:            connID,
 		ContainerName: containerName,
@@ -270,6 +280,17 @@ func (c *NFQueueCapture) handlePacket(attr nfqueue.Attribute) {
 		LastSeen:      time.Now(),
 		Active:        true,
 	}
+
+	if geo != nil {
+		conn.Country = geo.Country
+		conn.CountryCode = geo.CountryCode
+		conn.City = geo.City
+		conn.ISP = geo.ISP
+		conn.Org = geo.Org
+		conn.ASN = geo.AS
+		conn.Category = geo.Category
+	}
+
 	if direction == "outbound" {
 		conn.BytesSent = uint64(pkt.Length)
 	} else {
@@ -292,7 +313,7 @@ func (c *NFQueueCapture) parseIPPacket(data []byte) *PacketInfo {
 
 	version := data[0] >> 4
 	if version != 4 {
-		return nil // Only handle IPv4 for now
+		return nil
 	}
 
 	headerLen := int(data[0]&0x0F) * 4
@@ -328,7 +349,6 @@ func (c *NFQueueCapture) parseIPPacket(data []byte) *PacketInfo {
 		pkt.SrcPort = binary.BigEndian.Uint16(transportData[0:2])
 		pkt.DstPort = binary.BigEndian.Uint16(transportData[2:4])
 
-		// Check for DNS response (src port 53)
 		if pkt.SrcPort == 53 && len(transportData) > 8 {
 			pkt.IsDNS = true
 			pkt.DNSData = transportData[8:]
@@ -360,13 +380,41 @@ func (c *NFQueueCapture) cleanupLoop(ctx context.Context) {
 					conn.Active = false
 					connCopy := *conn
 					delete(c.connections, id)
-					// Remove flow index entries
 					for k, v := range c.flowIndex {
 						if v == id {
 							delete(c.flowIndex, k)
 						}
 					}
 					go c.handler(&connCopy, "connection_closed")
+				}
+			}
+			c.mu.Unlock()
+		}
+	}
+}
+
+// geoEnrichLoop periodically enriches connections with resolved geo data
+func (c *NFQueueCapture) geoEnrichLoop(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.mu.Lock()
+			for _, conn := range c.connections {
+				if conn.Category == "" || conn.Category == "resolving" {
+					if geo := c.geoResolver.GetCachedInfo(conn.RemoteIP); geo != nil {
+						conn.Country = geo.Country
+						conn.CountryCode = geo.CountryCode
+						conn.City = geo.City
+						conn.ISP = geo.ISP
+						conn.Org = geo.Org
+						conn.ASN = geo.AS
+						conn.Category = geo.Category
+					}
 				}
 			}
 			c.mu.Unlock()

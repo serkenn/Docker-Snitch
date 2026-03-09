@@ -23,6 +23,13 @@ type Connection struct {
 	StartTime     time.Time `json:"start_time"`
 	LastSeen      time.Time `json:"last_seen"`
 	Active        bool      `json:"active"`
+	Country       string    `json:"country,omitempty"`
+	CountryCode   string    `json:"country_code,omitempty"`
+	City          string    `json:"city,omitempty"`
+	ISP           string    `json:"isp,omitempty"`
+	Org           string    `json:"org,omitempty"`
+	ASN           string    `json:"asn,omitempty"`
+	Category      string    `json:"category,omitempty"` // tailnet, gcp, mullvad, private, cloudflare, aws, internet
 }
 
 // PacketInfo holds parsed information from a captured packet

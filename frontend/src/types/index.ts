@@ -14,6 +14,13 @@ export interface Connection {
   start_time: string
   last_seen: string
   active: boolean
+  country?: string
+  country_code?: string
+  city?: string
+  isp?: string
+  org?: string
+  asn?: string
+  category?: string // tailnet, gcp, mullvad, private, cloudflare, aws, azure, internet
 }
 
 export interface Container {

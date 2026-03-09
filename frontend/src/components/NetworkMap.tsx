@@ -6,12 +6,6 @@ interface Props {
   containers: Container[]
 }
 
-// Color palette for containers
-const COLORS = [
-  '#58a6ff', '#3fb950', '#f0883e', '#bc8cff', '#f778ba',
-  '#79c0ff', '#56d364', '#d29922', '#d2a8ff', '#ff9bce',
-]
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)}KB`
@@ -19,23 +13,46 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1073741824).toFixed(1)}GB`
 }
 
-// Sanitize string for Mermaid (remove special chars)
 function sanitize(s: string): string {
-  return s.replace(/[^a-zA-Z0-9_.-]/g, '_')
+  return s.replace(/[^a-zA-Z0-9_]/g, '_')
 }
 
-// Truncate long strings
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + '...' : s
+}
+
+const CATEGORY_STYLES: Record<string, { stroke: string; fill: string; label: string }> = {
+  tailnet:    { stroke: '#7c3aed', fill: '#1a0533', label: 'Tailnet' },
+  gcp:        { stroke: '#4285f4', fill: '#0d1b33', label: 'Google Cloud' },
+  mullvad:    { stroke: '#294a00', fill: '#0d1a00', label: 'Mullvad VPN' },
+  private:    { stroke: '#484f58', fill: '#0d1117', label: 'Private/Local' },
+  cloudflare: { stroke: '#f38020', fill: '#1a0f00', label: 'Cloudflare' },
+  aws:        { stroke: '#ff9900', fill: '#1a0f00', label: 'AWS' },
+  azure:      { stroke: '#0078d4', fill: '#001a33', label: 'Azure' },
+  hetzner:    { stroke: '#d50c2d', fill: '#1a0008', label: 'Hetzner' },
+  ovh:        { stroke: '#000e9c', fill: '#00011a', label: 'OVH' },
+  internet:   { stroke: '#8b949e', fill: '#0d1117', label: 'Internet' },
+  resolving:  { stroke: '#484f58', fill: '#0d1117', label: 'Resolving...' },
 }
 
 export function NetworkMap({ connections, containers }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const mermaidCode = useMemo(() => {
-    if (connections.length === 0 && containers.length === 0) return ''
+  // Aggregate data for the map
+  const { mermaidCode, categorySummary } = useMemo(() => {
+    if (connections.length === 0 && containers.length === 0) {
+      return { mermaidCode: '', categorySummary: [] }
+    }
 
-    // Aggregate connections: container -> remote endpoint
+    // Group connections by category
+    const byCategory = new Map<string, {
+      label: string
+      remotes: Map<string, { label: string; bytes: number; count: number; country: string; isp: string; blocked: boolean }>
+      totalBytes: number
+      totalConns: number
+    }>()
+
+    // Aggregate edges: container -> remote, grouped by category
     const edges = new Map<string, {
       container: string
       remote: string
@@ -46,11 +63,16 @@ export function NetworkMap({ connections, containers }: Props) {
       bytesRecv: number
       action: string
       count: number
+      category: string
+      country: string
+      isp: string
     }>()
 
     for (const conn of connections) {
+      const cat = conn.category || 'internet'
       const remoteLabel = conn.remote_domain || conn.remote_ip
       const key = `${conn.container}||${remoteLabel}:${conn.remote_port}/${conn.protocol}`
+
       const existing = edges.get(key)
       if (existing) {
         existing.bytesSent += conn.bytes_sent
@@ -61,88 +83,140 @@ export function NetworkMap({ connections, containers }: Props) {
         edges.set(key, {
           container: conn.container,
           remote: remoteLabel,
-          remoteLabel: truncate(remoteLabel, 25),
+          remoteLabel: truncate(remoteLabel, 22),
           protocol: conn.protocol,
           port: conn.remote_port,
           bytesSent: conn.bytes_sent,
           bytesRecv: conn.bytes_recv,
           action: conn.action,
           count: 1,
+          category: cat,
+          country: conn.country || '',
+          isp: conn.isp || '',
         })
       }
+
+      // Category summary
+      if (!byCategory.has(cat)) {
+        byCategory.set(cat, {
+          label: CATEGORY_STYLES[cat]?.label || cat,
+          remotes: new Map(),
+          totalBytes: 0,
+          totalConns: 0,
+        })
+      }
+      const catData = byCategory.get(cat)!
+      catData.totalBytes += conn.bytes_sent + conn.bytes_recv
+      catData.totalConns++
+
+      const remoteKey = remoteLabel
+      if (!catData.remotes.has(remoteKey)) {
+        catData.remotes.set(remoteKey, {
+          label: remoteLabel,
+          bytes: 0,
+          count: 0,
+          country: conn.country || '',
+          isp: conn.isp || '',
+          blocked: false,
+        })
+      }
+      const remote = catData.remotes.get(remoteKey)!
+      remote.bytes += conn.bytes_sent + conn.bytes_recv
+      remote.count++
+      if (conn.action === 'block') remote.blocked = true
     }
 
-    // Build Mermaid flowchart
+    // Build Mermaid with subgraphs per category
     const lines: string[] = ['graph LR']
-
-    // Style definitions
     lines.push('  classDef container fill:#161b22,stroke:#58a6ff,color:#c9d1d9,stroke-width:2px')
-    lines.push('  classDef remote fill:#0d1117,stroke:#30363d,color:#8b949e,stroke-width:1px')
     lines.push('  classDef blocked fill:#3d1116,stroke:#f85149,color:#f85149,stroke-width:2px')
-    lines.push('  classDef internet fill:#0d1117,stroke:#f0883e,color:#f0883e,stroke-width:2px')
 
-    // Docker network node
-    lines.push('  DOCKER_NET{{Docker Network}}')
-    lines.push('  class DOCKER_NET internet')
+    // Add category class defs
+    for (const [cat, style] of Object.entries(CATEGORY_STYLES)) {
+      lines.push(`  classDef cat_${cat} fill:${style.fill},stroke:${style.stroke},color:#c9d1d9,stroke-width:1px`)
+    }
 
     // Container nodes
     const containerIds = new Set<string>()
-    const containerColorMap = new Map<string, string>()
-    let colorIdx = 0
-
     for (const c of containers) {
       const id = `C_${sanitize(c.name)}`
       containerIds.add(id)
-      containerColorMap.set(c.name, COLORS[colorIdx % COLORS.length])
-      lines.push(`  ${id}["${truncate(c.name, 20)}<br/>${c.ip}"]`)
+      lines.push(`  ${id}["${truncate(c.name, 18)}<br/><small>${c.ip}</small>"]`)
       lines.push(`  class ${id} container`)
-      lines.push(`  DOCKER_NET --- ${id}`)
-      colorIdx++
     }
 
-    // Also add containers that appear in connections but not in container list
     for (const edge of edges.values()) {
       const id = `C_${sanitize(edge.container)}`
       if (!containerIds.has(id)) {
         containerIds.add(id)
-        containerColorMap.set(edge.container, COLORS[colorIdx % COLORS.length])
-        lines.push(`  ${id}["${truncate(edge.container, 20)}"]`)
+        lines.push(`  ${id}["${truncate(edge.container, 18)}"]`)
         lines.push(`  class ${id} container`)
-        lines.push(`  DOCKER_NET --- ${id}`)
-        colorIdx++
       }
     }
 
-    // Remote endpoint nodes and edges
+    // Group remotes by category in subgraphs
     const remoteIds = new Set<string>()
+    const addedSubgraphs = new Set<string>()
 
+    for (const [cat, catData] of byCategory) {
+      const style = CATEGORY_STYLES[cat] || CATEGORY_STYLES.internet
+      const subgraphId = `sg_${sanitize(cat)}`
+
+      if (!addedSubgraphs.has(cat)) {
+        addedSubgraphs.add(cat)
+        lines.push(`  subgraph ${subgraphId}["${style.label} - ${formatBytes(catData.totalBytes)}"]`)
+
+        for (const edge of edges.values()) {
+          if (edge.category !== cat) continue
+          const remoteId = `R_${sanitize(edge.remote)}_${edge.port}`
+          if (remoteIds.has(remoteId)) continue
+          remoteIds.add(remoteId)
+
+          const countryFlag = edge.country ? ` ${edge.country}` : ''
+          const label = `${edge.remoteLabel}<br/><small>:${edge.port}${countryFlag}</small>`
+          lines.push(`    ${remoteId}["${label}"]`)
+          if (edge.action === 'block') {
+            lines.push(`    class ${remoteId} blocked`)
+          } else {
+            lines.push(`    class ${remoteId} cat_${cat}`)
+          }
+        }
+
+        lines.push('  end')
+        // Style subgraph
+        lines.push(`  style ${subgraphId} fill:${style.fill},stroke:${style.stroke},color:${style.stroke}`)
+      }
+    }
+
+    // Add edges
     for (const edge of edges.values()) {
       const containerId = `C_${sanitize(edge.container)}`
       const remoteId = `R_${sanitize(edge.remote)}_${edge.port}`
-
-      if (!remoteIds.has(remoteId)) {
-        remoteIds.add(remoteId)
-        const label = `${edge.remoteLabel}<br/>:${edge.port}`
-        lines.push(`  ${remoteId}["${label}"]`)
-        if (edge.action === 'block') {
-          lines.push(`  class ${remoteId} blocked`)
-        } else {
-          lines.push(`  class ${remoteId} remote`)
-        }
-      }
-
-      // Edge with traffic info
-      const traffic = `${edge.protocol.toUpperCase()} ${formatBytes(edge.bytesSent + edge.bytesRecv)}`
-      const connLabel = edge.count > 1 ? `${traffic} x${edge.count}` : traffic
+      const total = formatBytes(edge.bytesSent + edge.bytesRecv)
+      const label = edge.count > 1 ? `${total} x${edge.count}` : total
 
       if (edge.action === 'block') {
-        lines.push(`  ${containerId} -.-x|"${connLabel}"| ${remoteId}`)
+        lines.push(`  ${containerId} -.-x|"${label}"| ${remoteId}`)
       } else {
-        lines.push(`  ${containerId} -->|"${connLabel}"| ${remoteId}`)
+        lines.push(`  ${containerId} -->|"${label}"| ${remoteId}`)
       }
     }
 
-    return lines.join('\n')
+    // Category summary for sidebar
+    const categorySummary = Array.from(byCategory.entries())
+      .map(([cat, data]) => ({
+        category: cat,
+        label: data.label,
+        totalBytes: data.totalBytes,
+        totalConns: data.totalConns,
+        color: CATEGORY_STYLES[cat]?.stroke || '#8b949e',
+        remotes: Array.from(data.remotes.values())
+          .sort((a, b) => b.bytes - a.bytes)
+          .slice(0, 8),
+      }))
+      .sort((a, b) => b.totalBytes - a.totalBytes)
+
+    return { mermaidCode: lines.join('\n'), categorySummary }
   }, [connections, containers])
 
   // Render Mermaid
@@ -150,7 +224,6 @@ export function NetworkMap({ connections, containers }: Props) {
     if (!containerRef.current || !mermaidCode) return
 
     const renderMermaid = async () => {
-      // Dynamically import mermaid
       const mermaid = (await import('mermaid')).default
       mermaid.initialize({
         startOnLoad: false,
@@ -165,19 +238,15 @@ export function NetworkMap({ connections, containers }: Props) {
           secondaryColor: '#21262d',
           tertiaryColor: '#161b22',
         },
-        flowchart: {
-          htmlLabels: true,
-          curve: 'basis',
-          padding: 12,
-        },
+        flowchart: { htmlLabels: true, curve: 'basis', padding: 12 },
         securityLevel: 'loose',
       })
 
       try {
-        const { svg } = await mermaid.render('network-map-svg', mermaidCode)
+        const id = 'network-map-' + Date.now()
+        const { svg } = await mermaid.render(id, mermaidCode)
         if (containerRef.current) {
           containerRef.current.innerHTML = svg
-          // Make SVG responsive
           const svgEl = containerRef.current.querySelector('svg')
           if (svgEl) {
             svgEl.style.maxWidth = '100%'
@@ -188,7 +257,7 @@ export function NetworkMap({ connections, containers }: Props) {
       } catch (err) {
         console.error('Mermaid render error:', err)
         if (containerRef.current) {
-          containerRef.current.innerHTML = `<pre style="color: #f85149; font-size: 12px;">${String(err)}</pre>`
+          containerRef.current.innerHTML = `<pre style="color:#f85149;font-size:12px">${String(err)}</pre>`
         }
       }
     }
@@ -199,52 +268,81 @@ export function NetworkMap({ connections, containers }: Props) {
   if (!mermaidCode) {
     return (
       <div style={styles.empty}>
-        No containers or connections to map. Start some containers to see the network topology.
+        No connections to map. Traffic data will appear here.
       </div>
     )
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.headerRow}>
-        <div style={styles.header}>Network Map</div>
-        <div style={styles.legend}>
-          <span style={styles.legendItem}>
-            <span style={{ ...styles.legendDot, background: '#58a6ff' }} /> Container
-          </span>
-          <span style={styles.legendItem}>
-            <span style={{ ...styles.legendDot, background: '#30363d' }} /> Remote
-          </span>
-          <span style={styles.legendItem}>
-            <span style={{ ...styles.legendDot, background: '#f85149' }} /> Blocked
-          </span>
-          <span style={styles.legendItem}>
-            <span style={{ ...styles.legendDot, background: '#f0883e' }} /> Docker Net
-          </span>
-        </div>
+    <div>
+      {/* Traffic breakdown by category */}
+      <div style={styles.summaryGrid}>
+        {categorySummary.map(cat => (
+          <div key={cat.category} style={{ ...styles.summaryCard, borderColor: cat.color }}>
+            <div style={styles.summaryHeader}>
+              <span style={{ ...styles.summaryDot, background: cat.color }} />
+              <span style={styles.summaryLabel}>{cat.label}</span>
+              <span style={styles.summaryBytes}>{formatBytes(cat.totalBytes)}</span>
+              <span style={styles.summaryCount}>{cat.totalConns} conn</span>
+            </div>
+            <div style={styles.summaryRemotes}>
+              {cat.remotes.map((r, i) => (
+                <div key={i} style={styles.summaryRemoteRow}>
+                  <span style={r.blocked ? styles.blockedRemote : styles.remoteText}>
+                    {truncate(r.label, 28)}
+                  </span>
+                  {r.country && <span style={styles.remoteCountry}>{r.country}</span>}
+                  {r.isp && <span style={styles.remoteIsp}>{truncate(r.isp, 18)}</span>}
+                  <span style={styles.remoteBytes}>{formatBytes(r.bytes)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
-      <div ref={containerRef} style={styles.mapArea} />
-      <details style={styles.details}>
-        <summary style={styles.detailsSummary}>Mermaid Source</summary>
-        <pre style={styles.code}>{mermaidCode}</pre>
-      </details>
+
+      {/* Mermaid diagram */}
+      <div style={styles.container}>
+        <div style={styles.header}>Network Topology</div>
+        <div ref={containerRef} style={styles.mapArea} />
+        <details style={styles.details}>
+          <summary style={styles.detailsSummary}>Mermaid Source</summary>
+          <pre style={styles.code}>{mermaidCode}</pre>
+        </details>
+      </div>
     </div>
   )
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  summaryGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
+    gap: 12, marginBottom: 16,
+  },
+  summaryCard: {
+    background: '#161b22', border: '1px solid', borderRadius: 8, padding: 12,
+  },
+  summaryHeader: {
+    display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8,
+  },
+  summaryDot: { width: 10, height: 10, borderRadius: '50%', flexShrink: 0 },
+  summaryLabel: { fontSize: 13, fontWeight: 600, color: '#c9d1d9', flex: 1 },
+  summaryBytes: { fontSize: 12, color: '#58a6ff', fontWeight: 600 },
+  summaryCount: { fontSize: 11, color: '#484f58' },
+  summaryRemotes: { display: 'flex', flexDirection: 'column', gap: 2 },
+  summaryRemoteRow: {
+    display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '1px 0',
+  },
+  remoteText: { color: '#8b949e', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  blockedRemote: { color: '#f85149', flex: 1, textDecoration: 'line-through' },
+  remoteCountry: { color: '#484f58', fontSize: 10, flexShrink: 0 },
+  remoteIsp: { color: '#484f58', fontSize: 10, flexShrink: 0, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  remoteBytes: { color: '#58a6ff', fontSize: 10, flexShrink: 0, minWidth: 45, textAlign: 'right' as const },
   container: {
     background: '#161b22', border: '1px solid #30363d', borderRadius: 8,
     padding: 16, marginBottom: 16,
   },
-  headerRow: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    marginBottom: 12,
-  },
-  header: { fontSize: 14, fontWeight: 600, color: '#c9d1d9' },
-  legend: { display: 'flex', gap: 12 },
-  legendItem: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#8b949e' },
-  legendDot: { width: 8, height: 8, borderRadius: '50%', display: 'inline-block' },
+  header: { fontSize: 14, fontWeight: 600, color: '#c9d1d9', marginBottom: 12 },
   mapArea: {
     background: '#0d1117', borderRadius: 8, padding: 16,
     minHeight: 300, overflow: 'auto',
@@ -255,12 +353,10 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 48, marginBottom: 16, textAlign: 'center', color: '#484f58', fontSize: 13,
   },
   details: { marginTop: 8 },
-  detailsSummary: {
-    cursor: 'pointer', fontSize: 11, color: '#484f58', padding: '4px 0',
-  },
+  detailsSummary: { cursor: 'pointer', fontSize: 11, color: '#484f58', padding: '4px 0' },
   code: {
     fontSize: 11, color: '#8b949e', background: '#0d1117', padding: 12,
     borderRadius: 6, overflow: 'auto', maxHeight: 200, marginTop: 4,
-    whiteSpace: 'pre-wrap',
+    whiteSpace: 'pre-wrap' as const,
   },
 }
