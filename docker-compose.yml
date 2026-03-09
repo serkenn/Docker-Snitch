@@ -13,6 +13,9 @@ services:
       - SNITCH_API_PORT=9645
       - SNITCH_DEFAULT_ACTION=allow
       - SNITCH_QUEUE_NUM=0
+      - SNITCH_QBIT_URL=${SNITCH_QBIT_URL:-}
+      - SNITCH_QBIT_USER=${SNITCH_QBIT_USER:-admin}
+      - SNITCH_QBIT_PASS=${SNITCH_QBIT_PASS:-}
     restart: unless-stopped
     stop_grace_period: 5s
 

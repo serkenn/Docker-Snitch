@@ -1,4 +1,4 @@
-import type { Connection, Container, Rule, Stats } from '../types'
+import type { Connection, Container, Rule, Stats, TorrentPeer, TorrentInfo } from '../types'
 
 const BASE = '/api'
 
@@ -19,6 +19,8 @@ export const api = {
   getConnections: () => fetchJSON<Connection[] | null>('/connections').then(r => r ?? []),
   getContainers: () => fetchJSON<Container[] | null>('/containers').then(r => r ?? []),
   getStats: () => fetchJSON<Stats>('/stats'),
+  getPeers: () => fetchJSON<TorrentPeer[] | null>('/peers').then(r => r ?? []),
+  getTorrents: () => fetchJSON<TorrentInfo[] | null>('/torrents').then(r => r ?? []),
 
   getRules: () => fetchJSON<Rule[] | null>('/rules').then(r => r ?? []),
   createRule: (rule: Omit<Rule, 'id'>) =>

@@ -50,6 +50,43 @@ export interface WSEvent {
   data: Connection
 }
 
+export interface TorrentPeer {
+  ip: string
+  port: number
+  client: string
+  country: string
+  country_code: string
+  city: string
+  isp: string
+  org: string
+  asn: string
+  lat: number
+  lon: number
+  dl_speed: number
+  up_speed: number
+  downloaded: number
+  uploaded: number
+  progress: number
+  flags: string
+  connection: string
+  torrent_name: string
+  torrent_hash: string
+}
+
+export interface TorrentInfo {
+  hash: string
+  name: string
+  state: string
+  size: number
+  dlspeed: number
+  upspeed: number
+  num_leechs: number
+  num_seeds: number
+  progress: number
+  downloaded: number
+  uploaded: number
+}
+
 export interface Stats {
   active_connections: number
   containers: number

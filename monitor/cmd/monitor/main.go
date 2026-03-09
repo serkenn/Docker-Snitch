@@ -13,6 +13,7 @@ import (
 	"github.com/serken/docker-snitch/internal/conntrack"
 	"github.com/serken/docker-snitch/internal/containers"
 	"github.com/serken/docker-snitch/internal/db"
+	"github.com/serken/docker-snitch/internal/qbit"
 	"github.com/serken/docker-snitch/internal/rules"
 )
 
@@ -87,8 +88,18 @@ func main() {
 		log.Fatalf("capture start: %v", err)
 	}
 
+	// qBittorrent client (optional)
+	qbitURL := getEnv("SNITCH_QBIT_URL", "")
+	qbitUser := getEnv("SNITCH_QBIT_USER", "admin")
+	qbitPass := getEnv("SNITCH_QBIT_PASS", "")
+	var qbitClient *qbit.Client
+	if qbitURL != "" {
+		qbitClient = qbit.NewClient(qbitURL, qbitUser, qbitPass, geoResolver)
+		log.Printf("qbit: configured at %s", qbitURL)
+	}
+
 	// API server
-	server := api.NewServer(apiPort, nfq, resolver, ruleStore, ruleEngine, hub)
+	server := api.NewServer(apiPort, nfq, resolver, ruleStore, ruleEngine, hub, qbitClient)
 	go func() {
 		if err := server.Start(); err != nil {
 			log.Printf("api server: %v", err)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/serken/docker-snitch/internal/capture"
 	"github.com/serken/docker-snitch/internal/containers"
+	"github.com/serken/docker-snitch/internal/qbit"
 	"github.com/serken/docker-snitch/internal/rules"
 )
 
@@ -21,10 +22,11 @@ type Server struct {
 	ruleStore *rules.Store
 	engine    *rules.Engine
 	hub       *WSHub
+	qbit      *qbit.Client
 }
 
 // NewServer creates a new API server
-func NewServer(port int, cap *capture.NFQueueCapture, resolver *containers.Resolver, ruleStore *rules.Store, engine *rules.Engine, hub *WSHub) *Server {
+func NewServer(port int, cap *capture.NFQueueCapture, resolver *containers.Resolver, ruleStore *rules.Store, engine *rules.Engine, hub *WSHub, qbitClient *qbit.Client) *Server {
 	return &Server{
 		port:      port,
 		capture:   cap,
@@ -32,6 +34,7 @@ func NewServer(port int, cap *capture.NFQueueCapture, resolver *containers.Resol
 		ruleStore: ruleStore,
 		engine:    engine,
 		hub:       hub,
+		qbit:      qbitClient,
 	}
 }
 
@@ -45,6 +48,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/rules/", s.handleRuleByID)
 	mux.HandleFunc("/api/stats", s.handleStats)
+	mux.HandleFunc("/api/peers", s.handlePeers)
+	mux.HandleFunc("/api/torrents", s.handleTorrents)
 	mux.HandleFunc("/api/ws", s.hub.HandleWS)
 
 	// CORS middleware
@@ -197,6 +202,40 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats["per_container"] = perContainer
 
 	writeJSON(w, stats)
+}
+
+func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	if s.qbit == nil || !s.qbit.IsConfigured() {
+		writeJSON(w, []struct{}{})
+		return
+	}
+	peers, err := s.qbit.GetAllPeers()
+	if err != nil {
+		log.Printf("api: peers error: %v", err)
+		writeJSON(w, []struct{}{})
+		return
+	}
+	if peers == nil {
+		peers = make([]qbit.Peer, 0)
+	}
+	writeJSON(w, peers)
+}
+
+func (s *Server) handleTorrents(w http.ResponseWriter, r *http.Request) {
+	if s.qbit == nil || !s.qbit.IsConfigured() {
+		writeJSON(w, []struct{}{})
+		return
+	}
+	torrents, err := s.qbit.GetTorrents()
+	if err != nil {
+		log.Printf("api: torrents error: %v", err)
+		writeJSON(w, []struct{}{})
+		return
+	}
+	if torrents == nil {
+		torrents = make([]qbit.TorrentInfo, 0)
+	}
+	writeJSON(w, torrents)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
