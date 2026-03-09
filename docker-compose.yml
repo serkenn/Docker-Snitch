@@ -1,0 +1,27 @@
+services:
+  monitor:
+    build: ./monitor
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - monitor-data:/data
+    environment:
+      - SNITCH_DB_PATH=/data/snitch.db
+      - SNITCH_API_PORT=9645
+      - SNITCH_DEFAULT_ACTION=allow
+      - SNITCH_QUEUE_NUM=0
+    restart: unless-stopped
+    stop_grace_period: 5s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - monitor
+
+volumes:
+  monitor-data:
