@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(cd /Users/serken/Desktop/Little-Snitch-docker/monitor && go build ./... 2>&1)",
+      "Read(//usr/local/go/**)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(cd /Users/serken/Desktop/Little-Snitch-docker/frontend && npx tsc --noEmit 2>&1 | head -30)"
     ]
   }
 }

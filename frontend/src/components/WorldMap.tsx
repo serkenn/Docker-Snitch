@@ -305,32 +305,43 @@ export function WorldMap({ connections }: Props) {
     }
 
     // --- Add Tailnet nodes ---
-    for (const [, t] of tailnetNodes) {
-      nodes.push({
-        lat: t.lat, lon: t.lon,
-        label: t.label,
-        sublabel: 'Tailnet',
-        category: 'tailnet',
-        color: CATEGORY_COLORS.tailnet,
-        totalBytes: t.bytes,
-        count: t.count,
-        details: [`${formatBytes(t.bytes)}`, `${t.count} connections`],
-        role: 'tailnet',
-      })
-      allPoints.push([t.lat, t.lon])
+    // Aggregate all tailnet connections (both with and without lat/lon)
+    const tailnetTotalBytes = Array.from(tailnetNodes.values()).reduce((s, t) => s + t.bytes, 0)
+    const tailnetTotalCount = Array.from(tailnetNodes.values()).reduce((s, t) => s + t.count, 0)
 
-      arcs.push({
-        from: [serverLat, serverLon],
-        to: [t.lat, t.lon],
-        color: CATEGORY_COLORS.tailnet,
-        weight: Math.max(2, Math.min(6, t.bytes / 1048576)),
-        popupLines: [
-          `GCP Server → ${t.label}`,
-          'Tailscale WireGuard',
-          `Traffic: ${formatBytes(t.bytes)}`,
-          `${t.count} connections`,
-        ],
-      })
+    for (const [, t] of tailnetNodes) {
+      // Only show on map if we have real coordinates
+      if (t.lat !== 0 || t.lon !== 0) {
+        nodes.push({
+          lat: t.lat, lon: t.lon,
+          label: t.label,
+          sublabel: 'Tailnet (Home)',
+          category: 'tailnet',
+          color: CATEGORY_COLORS.tailnet,
+          totalBytes: t.bytes,
+          count: t.count,
+          details: [
+            'Tailscale WireGuard Tunnel',
+            `Traffic: ${formatBytes(t.bytes)}`,
+            `${t.count} connections`,
+          ],
+          role: 'tailnet',
+        })
+        allPoints.push([t.lat, t.lon])
+
+        arcs.push({
+          from: [serverLat, serverLon],
+          to: [t.lat, t.lon],
+          color: CATEGORY_COLORS.tailnet,
+          weight: Math.max(2, Math.min(6, t.bytes / 1048576)),
+          popupLines: [
+            `GCP Server \u2194 ${t.label}`,
+            'Tailscale WireGuard Tunnel',
+            `Traffic: ${formatBytes(t.bytes)}`,
+            `${t.count} connections`,
+          ],
+        })
+      }
     }
 
     // --- Add Direct internet nodes ---
@@ -370,7 +381,7 @@ export function WorldMap({ connections }: Props) {
     const totalDlSpeed = peers.reduce((s, p) => s + p.dl_speed, 0)
     const totalUlSpeed = peers.reduce((s, p) => s + p.up_speed, 0)
 
-    return { serverLat, serverLon, serverCity, serverCountry, serverIP, nodes, arcs, allPoints, totalPeers, totalDl, totalUl, totalDlSpeed, totalUlSpeed }
+    return { serverLat, serverLon, serverCity, serverCountry, serverIP, nodes, arcs, allPoints, totalPeers, totalDl, totalUl, totalDlSpeed, totalUlSpeed, tailnetTotalBytes, tailnetTotalCount }
   }, [connections, peers, serverLoc])
 
   if (mapData.nodes.length === 0 && peers.length === 0) {
@@ -421,6 +432,15 @@ export function WorldMap({ connections }: Props) {
             <div style={styles.statLabel}>Mullvad VPN</div>
           </div>
         </div>
+        {mapData.tailnetTotalCount > 0 && (
+          <div style={{ ...styles.statCard, borderColor: CATEGORY_COLORS.tailnet }}>
+            <span style={{ ...styles.statDot, background: CATEGORY_COLORS.tailnet }} />
+            <div>
+              <div style={styles.statValue}>{mapData.tailnetTotalCount} conn</div>
+              <div style={styles.statLabel}>Tailnet ({formatBytes(mapData.tailnetTotalBytes)})</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Map */}
@@ -522,6 +542,11 @@ export function WorldMap({ connections }: Props) {
                   {node.role === 'vpn-exit' && (
                     <Tooltip direction="top" permanent>
                       <span style={{ fontWeight: 600, fontSize: 10 }}>Mullvad</span>
+                    </Tooltip>
+                  )}
+                  {node.role === 'tailnet' && (
+                    <Tooltip direction="top" permanent>
+                      <span style={{ fontWeight: 600, fontSize: 10, color: CATEGORY_COLORS.tailnet }}>Home (Tailnet)</span>
                     </Tooltip>
                   )}
                   <Popup>

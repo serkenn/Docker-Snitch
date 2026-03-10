@@ -106,3 +106,23 @@ export interface Stats {
   containers: number
   per_container: Record<string, { connections: number; bytes_sent: number; bytes_recv: number }>
 }
+
+export interface LeakTestResult {
+  status: 'secure' | 'leak' | 'warning' | 'no_torrent'
+  server_ip: string
+  mullvad_exits: string[]
+  leaked_connections: LeakedConnection[]
+  vpn_conn_count: number
+  direct_conn_count: number
+  checked_at: string
+}
+
+export interface LeakedConnection {
+  container: string
+  remote_ip: string
+  remote_port: number
+  domain: string
+  country: string
+  isp: string
+  category: string
+}

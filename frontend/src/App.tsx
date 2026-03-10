@@ -9,6 +9,7 @@ import { RuleEditor } from './components/RuleEditor'
 import { TrafficChart } from './components/TrafficChart'
 import { NetworkMap } from './components/NetworkMap'
 import { WorldMap } from './components/WorldMap'
+import { LeakStatus } from './components/LeakStatus'
 
 type Tab = 'connections' | 'rules' | 'map' | 'worldmap'
 
@@ -137,6 +138,7 @@ export default function App() {
             {formatBytes(totalBytes.sent)} sent / {formatBytes(totalBytes.recv)} recv
           </span>
           <span style={styles.stat}>{containers.length} containers</span>
+          <LeakStatus />
         </div>
       </header>
 

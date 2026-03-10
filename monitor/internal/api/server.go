@@ -61,6 +61,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/torrents", s.handleTorrents)
 	mux.HandleFunc("/api/server-location", s.handleServerLocation)
 	mux.HandleFunc("/api/host-events", s.handleHostEvents)
+	mux.HandleFunc("/api/leak-test", s.handleLeakTest)
 	mux.HandleFunc("/api/ws", s.hub.HandleWS)
 
 	// CORS middleware
@@ -349,6 +350,14 @@ func (s *Server) handleHostEvents(w http.ResponseWriter, r *http.Request) {
 				conn.Lon = geo.Lon
 			}
 
+			// Override category for Tailscale daemon connections —
+			// tailscaled's WireGuard traffic goes to real public IPs but is Tailnet traffic
+			if isTailscaleProcess(procName) {
+				conn.Category = "tailnet"
+				conn.Org = "Tailscale WireGuard"
+				conn.ISP = "Tailscale"
+			}
+
 			s.hostConns[key] = conn
 
 			// Broadcast new event
@@ -361,18 +370,29 @@ func (s *Server) handleHostEvents(w http.ResponseWriter, r *http.Request) {
 			conn.LastSeen = time.Now()
 			conn.Active = true
 
-			// Re-enrich if still resolving
-			if conn.Category == "" || conn.Category == "resolving" {
+			// Re-enrich if still resolving or tailnet missing geo coords
+			needsGeo := conn.Category == "" || conn.Category == "resolving"
+			needsCoords := conn.Lat == 0 && conn.Lon == 0 && conn.Category == "tailnet"
+			if needsGeo || needsCoords {
 				if geo := s.geo.GetCachedInfo(conn.RemoteIP); geo != nil {
 					conn.Country = geo.Country
 					conn.CountryCode = geo.CountryCode
 					conn.City = geo.City
-					conn.ISP = geo.ISP
-					conn.Org = geo.Org
-					conn.ASN = geo.AS
-					conn.Category = geo.Category
 					conn.Lat = geo.Lat
 					conn.Lon = geo.Lon
+					if needsGeo {
+						// Full re-enrich: update ISP/Org/Category
+						conn.ISP = geo.ISP
+						conn.Org = geo.Org
+						conn.ASN = geo.AS
+						conn.Category = geo.Category
+					}
+					// Preserve tailnet override for tailscaled connections
+					if isTailscaleProcess(strings.Trim(conn.ContainerName, "[]")) {
+						conn.Category = "tailnet"
+						conn.Org = "Tailscale WireGuard"
+						conn.ISP = "Tailscale"
+					}
 				}
 			}
 
@@ -399,6 +419,11 @@ func (s *Server) handleHostEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]int{"accepted": len(events)})
 }
 
+func isTailscaleProcess(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == "tailscaled" || lower == "tailscale" || strings.HasPrefix(lower, "tailscale")
+}
+
 func isLocalIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
 		return true
@@ -423,6 +448,129 @@ func (s *Server) handleServerLocation(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// LeakTestResult holds the torrent VPN leak test result
+type LeakTestResult struct {
+	Status            string       `json:"status"` // secure, leak, warning, no_torrent
+	ServerIP          string       `json:"server_ip"`
+	MullvadExits      []string     `json:"mullvad_exits"`
+	LeakedConnections []LeakedConn `json:"leaked_connections"`
+	VPNConnCount      int          `json:"vpn_conn_count"`
+	DirectConnCount   int          `json:"direct_conn_count"`
+	CheckedAt         string       `json:"checked_at"`
+}
+
+// LeakedConn describes a connection that bypasses VPN
+type LeakedConn struct {
+	Container  string `json:"container"`
+	RemoteIP   string `json:"remote_ip"`
+	RemotePort uint16 `json:"remote_port"`
+	Domain     string `json:"domain"`
+	Country    string `json:"country"`
+	ISP        string `json:"isp"`
+	Category   string `json:"category"`
+}
+
+func (s *Server) handleLeakTest(w http.ResponseWriter, r *http.Request) {
+	conns := s.capture.GetConnections()
+
+	// Append host connections
+	s.hostMu.RLock()
+	for _, hc := range s.hostConns {
+		cp := *hc
+		conns = append(conns, &cp)
+	}
+	s.hostMu.RUnlock()
+
+	serverLoc := s.geo.GetServerLocation()
+	serverIP := ""
+	if serverLoc != nil {
+		serverIP = serverLoc.IP
+	}
+
+	// Find torrent-related containers
+	torrentConns := make([]*capture.Connection, 0)
+	for _, c := range conns {
+		name := strings.ToLower(c.ContainerName)
+		if strings.Contains(name, "qbit") || strings.Contains(name, "torrent") ||
+			strings.Contains(name, "deluge") || strings.Contains(name, "transmission") {
+			torrentConns = append(torrentConns, c)
+		}
+	}
+
+	if len(torrentConns) == 0 {
+		writeJSON(w, LeakTestResult{
+			Status:    "no_torrent",
+			ServerIP:  serverIP,
+			CheckedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	vpnCount := 0
+	directCount := 0
+	mullvadExitSet := make(map[string]bool)
+	var leaked []LeakedConn
+
+	safeCategories := map[string]bool{
+		"mullvad": true,
+		"private": true,
+		"tailnet": true,
+	}
+
+	for _, c := range torrentConns {
+		cat := c.Category
+		if cat == "" || cat == "resolving" {
+			continue
+		}
+
+		if safeCategories[cat] {
+			vpnCount++
+			if cat == "mullvad" {
+				mullvadExitSet[c.RemoteIP] = true
+			}
+			continue
+		}
+
+		// Skip DNS traffic (port 53) — expected to be local
+		if c.RemotePort == 53 {
+			continue
+		}
+
+		directCount++
+		leaked = append(leaked, LeakedConn{
+			Container:  c.ContainerName,
+			RemoteIP:   c.RemoteIP,
+			RemotePort: c.RemotePort,
+			Domain:     c.RemoteDomain,
+			Country:    c.Country,
+			ISP:        c.ISP,
+			Category:   cat,
+		})
+	}
+
+	mullvadExits := make([]string, 0, len(mullvadExitSet))
+	for ip := range mullvadExitSet {
+		mullvadExits = append(mullvadExits, ip)
+	}
+
+	status := "secure"
+	if directCount > 0 {
+		status = "leak"
+	} else if vpnCount == 0 {
+		status = "warning"
+	}
+
+	writeJSON(w, LeakTestResult{
+		Status:            status,
+		ServerIP:          serverIP,
+		MullvadExits:      mullvadExits,
+		LeakedConnections: leaked,
+		VPNConnCount:      vpnCount,
+		DirectConnCount:   directCount,
+		CheckedAt:         time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func validateRule(r *rules.Rule) error {
